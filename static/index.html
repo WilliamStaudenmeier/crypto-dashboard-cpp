@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crypto Dashboard C++</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <div class="top-controls">
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-expanded="true">Hide Charts</button>
+      </div>
+
+      <div class="dashboard-layout">
+        <aside id="chart-sidebar" class="chart-sidebar panel">
+          <div class="panel-head">
+            <h2>Top 5 Price History</h2>
+          </div>
+          <div id="line-charts" class="line-charts"></div>
+        </aside>
+
+        <section class="content-column">
+          <header class="hero">
+            <p class="badge">Built with C++</p>
+            <h1>Crypto Dashboard C++</h1>
+            <p class="subtitle">Live market snapshot powered by CoinGecko and served by a native C++ web service.</p>
+          </header>
+
+          <section class="stats-grid">
+            <article class="card">
+              <h2>Total Market Cap</h2>
+              <p id="market-cap">Loading...</p>
+            </article>
+            <article class="card">
+              <h2>24h Volume</h2>
+              <p id="volume">Loading...</p>
+            </article>
+            <article class="card">
+              <h2>BTC Dominance</h2>
+              <p id="btc-dom">Loading...</p>
+            </article>
+            <article class="card">
+              <h2>ETH Dominance</h2>
+              <p id="eth-dom">Loading...</p>
+            </article>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Trending Tokens</h2>
+            </div>
+            <ul id="trending-list"></ul>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Top Coins by Market Cap</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Price</th>
+                    <th>24h</th>
+                    <th>Market Cap</th>
+                    <th>Rank</th>
+                  </tr>
+                </thead>
+                <tbody id="coins-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

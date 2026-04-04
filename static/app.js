@@ -8,6 +8,7 @@ const formatMoney = (value) =>
 const formatPercent = (value) => `${(value || 0).toFixed(2)}%`;
 let topFiveCoins = [];
 const HISTORY_DAYS = 365;
+let chartsLoaded = false;
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -27,6 +28,16 @@ function setupSidebarToggle() {
     const collapsed = document.body.classList.toggle("sidebar-collapsed");
     button.textContent = collapsed ? "Show Charts" : "Hide Charts";
     button.setAttribute("aria-expanded", String(!collapsed));
+
+    if (!collapsed && !chartsLoaded && topFiveCoins.length) {
+      renderLineCharts(topFiveCoins, HISTORY_DAYS)
+        .then(() => {
+          chartsLoaded = true;
+        })
+        .catch((error) => {
+          console.error(error);
+        });
+    }
   });
 }
 
@@ -164,7 +175,10 @@ async function bootstrap() {
     renderMarkets(markets);
 
     topFiveCoins = markets.slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
-    await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+    if (!document.body.classList.contains("sidebar-collapsed")) {
+      await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+      chartsLoaded = true;
+    }
   } catch (error) {
     console.error(error);
   }

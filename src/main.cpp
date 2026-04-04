@@ -26,6 +26,7 @@ struct CacheEntry {
 std::unordered_map<std::string, CacheEntry> g_api_cache;
 std::mutex g_api_cache_mutex;
 std::mutex g_snapshot_file_mutex;
+std::string g_cors_allow_origin = "*";
 
 struct ApiConfig {
   std::string scheme;
@@ -58,7 +59,7 @@ ApiConfig parse_api_base_url(const std::string &url) {
   return cfg;
 }
 
-std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, const std::string &api_key,
+std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path,
                                int timeout_seconds = 10, int cache_ttl_seconds = 0) {
   const std::string base = cfg.scheme + "://" + cfg.host;
   httplib::Client client(base);
@@ -71,18 +72,7 @@ std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, co
   client.set_read_timeout(timeout_seconds, 0);
   client.set_connection_timeout(timeout_seconds, 0);
 
-  httplib::Headers headers;
-  if (!api_key.empty()) {
-    headers.emplace("x-cg-pro-api-key", api_key);
-    headers.emplace("x-cg-demo-api-key", api_key);
-  }
-
   std::string full_path = cfg.base_path + path;
-  if (!api_key.empty() && full_path.find("x_cg_demo_api_key=") == std::string::npos) {
-    const char separator = full_path.find('?') == std::string::npos ? '?' : '&';
-    full_path += separator;
-    full_path += "x_cg_demo_api_key=" + api_key;
-  }
 
   if (cache_ttl_seconds > 0) {
     std::lock_guard<std::mutex> lock(g_api_cache_mutex);
@@ -92,7 +82,7 @@ std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, co
     }
   }
 
-  auto response = client.Get(full_path.c_str(), headers);
+  auto response = client.Get(full_path.c_str());
   if (!response || response->status != 200) {
     return std::nullopt;
   }
@@ -114,6 +104,9 @@ std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, co
 
 void respond_json(httplib::Response &res, const json &payload, int status = 200) {
   res.status = status;
+  res.set_header("Access-Control-Allow-Origin", g_cors_allow_origin);
+  res.set_header("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.set_header("Access-Control-Allow-Headers", "Content-Type");
   res.set_header("Content-Type", "application/json; charset=utf-8");
   res.set_content(payload.dump(), "application/json; charset=utf-8");
 }
@@ -207,18 +200,18 @@ fs::path resolve_snapshot_path(const char *argv0) {
   return fs::absolute(candidates.front());
 }
 
-std::optional<json> fetch_bootstrap_live(const ApiConfig &api_cfg, const std::string &api_key) {
+std::optional<json> fetch_bootstrap_live(const ApiConfig &api_cfg) {
   const std::string markets_path =
       "/coins/markets?vs_currency=usd&order=market_cap_desc&sparkline=false&price_change_percentage=24h&per_page=20&page=1";
 
   auto global_future = std::async(std::launch::async, [&]() {
-    return fetch_json(api_cfg, "/global", api_key, 10, 60);
+    return fetch_json(api_cfg, "/global", 10, 60);
   });
   auto trending_future = std::async(std::launch::async, [&]() {
-    return fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
+    return fetch_json(api_cfg, "/search/trending", 10, 60);
   });
   auto markets_future = std::async(std::launch::async, [&]() {
-    return fetch_json(api_cfg, markets_path, api_key, 10, 30);
+    return fetch_json(api_cfg, markets_path, 10, 30);
   });
 
   auto global = global_future.get();
@@ -267,10 +260,11 @@ int main(int argc, char **argv) {
   const int port = port_env ? std::stoi(port_env) : 8080;
 
   const char *base_url_env = std::getenv("COINGECKO_BASE_URL");
-  const char *api_key_env = std::getenv("COINGECKO_API_KEY");
-
+  const char *cors_origin_env = std::getenv("FRONTEND_ORIGIN");
   const ApiConfig api_cfg = parse_api_base_url(base_url_env ? base_url_env : "");
-  const std::string api_key = api_key_env ? api_key_env : "";
+  if (cors_origin_env && std::string(cors_origin_env).size() > 0) {
+    g_cors_allow_origin = cors_origin_env;
+  }
   const fs::path static_dir = resolve_static_dir(argc > 0 ? argv[0] : nullptr);
   const fs::path snapshot_path = resolve_snapshot_path(argc > 0 ? argv[0] : nullptr);
 
@@ -281,7 +275,7 @@ int main(int argc, char **argv) {
   });
 
   server.Get("/api/global", [&](const httplib::Request &, httplib::Response &res) {
-    auto data = fetch_json(api_cfg, "/global", api_key, 10, 60);
+    auto data = fetch_json(api_cfg, "/global", 10, 60);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch global market data"}}, 502);
       return;
@@ -308,7 +302,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    auto live_payload = fetch_bootstrap_live(api_cfg, api_key);
+    auto live_payload = fetch_bootstrap_live(api_cfg);
     if (live_payload) {
       write_json_file(snapshot_path, *live_payload);
       res.set_header("Cache-Control", "no-cache");
@@ -334,7 +328,7 @@ int main(int argc, char **argv) {
   });
 
   server.Get("/api/trending", [&](const httplib::Request &, httplib::Response &res) {
-    auto data = fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
+    auto data = fetch_json(api_cfg, "/search/trending", 10, 60);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch trending data"}}, 502);
       return;
@@ -351,7 +345,7 @@ int main(int argc, char **argv) {
                              "&order=market_cap_desc&sparkline=false&price_change_percentage=24h" +
                              "&per_page=" + per_page + "&page=" + page;
 
-    auto data = fetch_json(api_cfg, path, api_key, 10, 30);
+    auto data = fetch_json(api_cfg, path, 10, 30);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch market list"}}, 502);
       return;
@@ -372,7 +366,7 @@ int main(int argc, char **argv) {
     const std::string path = "/coins/" + coin_id + "/market_chart?vs_currency=" + vs_currency +
                              "&days=" + days + "&interval=daily";
 
-    auto data = fetch_json(api_cfg, path, api_key, 10, 300);
+    auto data = fetch_json(api_cfg, path, 10, 300);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch market history"}}, 502);
       return;

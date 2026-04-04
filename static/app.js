@@ -8,8 +8,16 @@ const formatMoney = (value) =>
 const formatPercent = (value) => `${(value || 0).toFixed(2)}%`;
 let topFiveCoins = [];
 const HISTORY_DAYS = 365;
-const ONE_TIME_REFRESH_DELAY_MS = 15000;
 let chartsLoaded = false;
+const EXPLICIT_API_BASE = (window.__API_BASE_URL__ || "").replace(/\/$/, "");
+const DEFAULT_RENDER_API_BASE = "https://crypto-dashboard-cpp.onrender.com";
+const API_BASE_URL =
+  EXPLICIT_API_BASE ||
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : DEFAULT_RENDER_API_BASE);
+
+function apiUrl(path) {
+  return `${API_BASE_URL}${path}`;
+}
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -124,7 +132,7 @@ async function renderLineCharts(coins, days) {
   const results = await Promise.all(
     coins.map(async (coin) => {
       try {
-        const data = await fetchJson(`/api/history?coin_id=${encodeURIComponent(coin.id)}&days=${days}&vs_currency=usd`);
+        const data = await fetchJson(apiUrl(`/api/history?coin_id=${encodeURIComponent(coin.id)}&days=${days}&vs_currency=usd`));
         const prices = (data?.prices || []).map((entry) => entry[1]);
         return { coin, prices };
       } catch {
@@ -165,7 +173,15 @@ async function bootstrap() {
   try {
     setupSidebarToggle();
 
-    const bootstrapData = await fetchJson("/api/bootstrap");
+    let bootstrapData;
+    try {
+      // Stale-first: render snapshot instantly.
+      bootstrapData = await fetchJson("/db.json");
+    } catch {
+      // Fallback to backend bootstrap if snapshot is unavailable.
+      bootstrapData = await fetchJson(apiUrl("/api/bootstrap"));
+    }
+
     renderGlobal(bootstrapData?.global);
     renderTrending(bootstrapData?.trending);
     renderMarkets(bootstrapData?.markets || []);
@@ -176,18 +192,22 @@ async function bootstrap() {
       chartsLoaded = true;
     }
 
+    // Refresh right after initial render and replace stale data with live data.
     setTimeout(async () => {
       try {
-        const refreshedData = await fetchJson("/api/bootstrap?refresh=1");
+        const refreshedData = await fetchJson(apiUrl("/api/bootstrap?refresh=1"));
         renderGlobal(refreshedData?.global);
         renderTrending(refreshedData?.trending);
         renderMarkets(refreshedData?.markets || []);
 
         topFiveCoins = (refreshedData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
+        if (chartsLoaded && !document.body.classList.contains("sidebar-collapsed")) {
+          await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+        }
       } catch (error) {
         console.error(error);
       }
-    }, ONE_TIME_REFRESH_DELAY_MS);
+    }, 0);
   } catch (error) {
     console.error(error);
   }

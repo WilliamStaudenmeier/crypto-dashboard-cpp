@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <chrono>
+#include <future>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -188,15 +189,26 @@ int main(int argc, char **argv) {
                                      "&order=market_cap_desc&sparkline=false&price_change_percentage=24h" +
                                      "&per_page=" + per_page + "&page=" + page;
 
-    auto global = fetch_json(api_cfg, "/global", api_key, 10, 60);
-    auto trending = fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
-    auto markets = fetch_json(api_cfg, markets_path, api_key, 10, 30);
+    auto global_future = std::async(std::launch::async, [&]() {
+      return fetch_json(api_cfg, "/global", api_key, 10, 60);
+    });
+    auto trending_future = std::async(std::launch::async, [&]() {
+      return fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
+    });
+    auto markets_future = std::async(std::launch::async, [&]() {
+      return fetch_json(api_cfg, markets_path, api_key, 10, 30);
+    });
+
+    auto global = global_future.get();
+    auto trending = trending_future.get();
+    auto markets = markets_future.get();
 
     if (!global || !trending || !markets) {
       respond_json(res, json{{"error", "Failed to fetch bootstrap market data"}}, 502);
       return;
     }
 
+    res.set_header("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
     respond_json(res, json{{"global", *global}, {"trending", *trending}, {"markets", *markets}});
   });
 
@@ -254,6 +266,7 @@ int main(int argc, char **argv) {
       res.set_content("Dashboard HTML not found", "text/plain; charset=utf-8");
       return;
     }
+    res.set_header("Cache-Control", "no-cache");
     res.set_content(html, "text/html; charset=utf-8");
   });
 
@@ -263,6 +276,7 @@ int main(int argc, char **argv) {
       res.status = 404;
       return;
     }
+    res.set_header("Cache-Control", "public, max-age=300");
     res.set_content(css, "text/css; charset=utf-8");
   });
 
@@ -272,6 +286,7 @@ int main(int argc, char **argv) {
       res.status = 404;
       return;
     }
+    res.set_header("Cache-Control", "public, max-age=300");
     res.set_content(js, "application/javascript; charset=utf-8");
   });
 

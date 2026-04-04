@@ -2,6 +2,8 @@
 
 A lightweight cryptocurrency market dashboard built with C++.
 
+See the project here: https://static-navy-xi.vercel.app
+
 ## Overview
 
 - C++17 HTTP server using `cpp-httplib`

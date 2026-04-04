@@ -60,9 +60,16 @@ std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, co
   httplib::Headers headers;
   if (!api_key.empty()) {
     headers.emplace("x-cg-pro-api-key", api_key);
+    headers.emplace("x-cg-demo-api-key", api_key);
   }
 
-  const std::string full_path = cfg.base_path + path;
+  std::string full_path = cfg.base_path + path;
+  if (!api_key.empty() && full_path.find("x_cg_demo_api_key=") == std::string::npos) {
+    const char separator = full_path.find('?') == std::string::npos ? '?' : '&';
+    full_path += separator;
+    full_path += "x_cg_demo_api_key=" + api_key;
+  }
+
   auto response = client.Get(full_path.c_str(), headers);
   if (!response || response->status != 200) {
     return std::nullopt;

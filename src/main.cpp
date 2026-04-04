@@ -179,6 +179,27 @@ int main(int argc, char **argv) {
     respond_json(res, *data);
   });
 
+  server.Get("/api/bootstrap", [&](const httplib::Request &, httplib::Response &res) {
+    const std::string vs_currency = "usd";
+    const std::string page = "1";
+    const std::string per_page = "20";
+
+    const std::string markets_path = "/coins/markets?vs_currency=" + vs_currency +
+                                     "&order=market_cap_desc&sparkline=false&price_change_percentage=24h" +
+                                     "&per_page=" + per_page + "&page=" + page;
+
+    auto global = fetch_json(api_cfg, "/global", api_key, 10, 60);
+    auto trending = fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
+    auto markets = fetch_json(api_cfg, markets_path, api_key, 10, 30);
+
+    if (!global || !trending || !markets) {
+      respond_json(res, json{{"error", "Failed to fetch bootstrap market data"}}, 502);
+      return;
+    }
+
+    respond_json(res, json{{"global", *global}, {"trending", *trending}, {"markets", *markets}});
+  });
+
   server.Get("/api/trending", [&](const httplib::Request &, httplib::Response &res) {
     auto data = fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
     if (!data) {

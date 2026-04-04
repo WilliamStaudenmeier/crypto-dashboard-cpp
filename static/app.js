@@ -164,11 +164,10 @@ async function bootstrap() {
   try {
     setupSidebarToggle();
 
-    const [globalData, trending, markets] = await Promise.all([
-      fetchJson("/api/global"),
-      fetchJson("/api/trending"),
-      fetchJson("/api/markets?vs_currency=usd&per_page=20&page=1"),
-    ]);
+    const bootstrapData = await fetchJson("/api/bootstrap");
+    const globalData = bootstrapData?.global;
+    const trending = bootstrapData?.trending;
+    const markets = bootstrapData?.markets || [];
 
     renderGlobal(globalData);
     renderTrending(trending);

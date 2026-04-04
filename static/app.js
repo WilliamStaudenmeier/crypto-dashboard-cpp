@@ -8,6 +8,7 @@ const formatMoney = (value) =>
 const formatPercent = (value) => `${(value || 0).toFixed(2)}%`;
 let topFiveCoins = [];
 const HISTORY_DAYS = 365;
+const ONE_TIME_REFRESH_DELAY_MS = 15000;
 let chartsLoaded = false;
 
 async function fetchJson(url) {
@@ -165,19 +166,28 @@ async function bootstrap() {
     setupSidebarToggle();
 
     const bootstrapData = await fetchJson("/api/bootstrap");
-    const globalData = bootstrapData?.global;
-    const trending = bootstrapData?.trending;
-    const markets = bootstrapData?.markets || [];
+    renderGlobal(bootstrapData?.global);
+    renderTrending(bootstrapData?.trending);
+    renderMarkets(bootstrapData?.markets || []);
 
-    renderGlobal(globalData);
-    renderTrending(trending);
-    renderMarkets(markets);
-
-    topFiveCoins = markets.slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
+    topFiveCoins = (bootstrapData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
     if (!document.body.classList.contains("sidebar-collapsed")) {
       await renderLineCharts(topFiveCoins, HISTORY_DAYS);
       chartsLoaded = true;
     }
+
+    setTimeout(async () => {
+      try {
+        const refreshedData = await fetchJson("/api/bootstrap?refresh=1");
+        renderGlobal(refreshedData?.global);
+        renderTrending(refreshedData?.trending);
+        renderMarkets(refreshedData?.markets || []);
+
+        topFiveCoins = (refreshedData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
+      } catch (error) {
+        console.error(error);
+      }
+    }, ONE_TIME_REFRESH_DELAY_MS);
   } catch (error) {
     console.error(error);
   }

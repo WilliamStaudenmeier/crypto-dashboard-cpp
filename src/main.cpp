@@ -10,6 +10,7 @@
 #include <vector>
 #include <chrono>
 #include <future>
+#include <cstdint>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -24,6 +25,7 @@ struct CacheEntry {
 
 std::unordered_map<std::string, CacheEntry> g_api_cache;
 std::mutex g_api_cache_mutex;
+std::mutex g_snapshot_file_mutex;
 
 struct ApiConfig {
   std::string scheme;
@@ -127,6 +129,112 @@ std::string read_text_file(const std::string &file_path) {
   return buffer.str();
 }
 
+std::int64_t now_epoch_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+bool is_valid_bootstrap_payload(const json &payload) {
+  return payload.is_object() && payload.contains("global") && payload.contains("trending") && payload.contains("markets");
+}
+
+std::optional<json> read_json_file(const fs::path &file_path) {
+  std::lock_guard<std::mutex> lock(g_snapshot_file_mutex);
+
+  std::ifstream file(file_path);
+  if (!file.is_open()) {
+    return std::nullopt;
+  }
+
+  try {
+    json parsed;
+    file >> parsed;
+    return parsed;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+bool write_json_file(const fs::path &file_path, const json &payload) {
+  std::lock_guard<std::mutex> lock(g_snapshot_file_mutex);
+
+  std::error_code ec;
+  fs::create_directories(file_path.parent_path(), ec);
+
+  const fs::path temp_path = file_path.string() + ".tmp";
+  {
+    std::ofstream temp_file(temp_path, std::ios::trunc);
+    if (!temp_file.is_open()) {
+      return false;
+    }
+    temp_file << payload.dump();
+  }
+
+  fs::rename(temp_path, file_path, ec);
+  if (ec) {
+    fs::remove(file_path, ec);
+    ec.clear();
+    fs::rename(temp_path, file_path, ec);
+  }
+
+  return !ec;
+}
+
+fs::path resolve_snapshot_path(const char *argv0) {
+  const char *snapshot_env = std::getenv("SNAPSHOT_PATH");
+  if (snapshot_env && std::string(snapshot_env).size() > 0) {
+    return fs::absolute(snapshot_env);
+  }
+
+  std::vector<fs::path> candidates;
+  candidates.emplace_back("db.json");
+
+  if (argv0 && std::string(argv0).size() > 0) {
+    fs::path exe_path = fs::absolute(fs::path(argv0));
+    fs::path exe_dir = exe_path.parent_path();
+    candidates.push_back(exe_dir / "db.json");
+    candidates.push_back(exe_dir.parent_path() / "db.json");
+  }
+
+  for (const auto &candidate : candidates) {
+    std::error_code ec;
+    if (fs::exists(candidate, ec)) {
+      return fs::absolute(candidate);
+    }
+  }
+
+  return fs::absolute(candidates.front());
+}
+
+std::optional<json> fetch_bootstrap_live(const ApiConfig &api_cfg, const std::string &api_key) {
+  const std::string markets_path =
+      "/coins/markets?vs_currency=usd&order=market_cap_desc&sparkline=false&price_change_percentage=24h&per_page=20&page=1";
+
+  auto global_future = std::async(std::launch::async, [&]() {
+    return fetch_json(api_cfg, "/global", api_key, 10, 60);
+  });
+  auto trending_future = std::async(std::launch::async, [&]() {
+    return fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
+  });
+  auto markets_future = std::async(std::launch::async, [&]() {
+    return fetch_json(api_cfg, markets_path, api_key, 10, 30);
+  });
+
+  auto global = global_future.get();
+  auto trending = trending_future.get();
+  auto markets = markets_future.get();
+
+  if (!global || !trending || !markets) {
+    return std::nullopt;
+  }
+
+  return json{{"global", *global},
+              {"trending", *trending},
+              {"markets", *markets},
+              {"meta", {{"source", "live"}, {"updated_at_epoch_ms", now_epoch_ms()}}}};
+}
+
 fs::path resolve_static_dir(const char *argv0) {
   std::vector<fs::path> candidates;
 
@@ -164,6 +272,7 @@ int main(int argc, char **argv) {
   const ApiConfig api_cfg = parse_api_base_url(base_url_env ? base_url_env : "");
   const std::string api_key = api_key_env ? api_key_env : "";
   const fs::path static_dir = resolve_static_dir(argc > 0 ? argv[0] : nullptr);
+  const fs::path snapshot_path = resolve_snapshot_path(argc > 0 ? argv[0] : nullptr);
 
   httplib::Server server;
 
@@ -180,36 +289,48 @@ int main(int argc, char **argv) {
     respond_json(res, *data);
   });
 
-  server.Get("/api/bootstrap", [&](const httplib::Request &, httplib::Response &res) {
-    const std::string vs_currency = "usd";
-    const std::string page = "1";
-    const std::string per_page = "20";
+  server.Get("/api/bootstrap", [&](const httplib::Request &req, httplib::Response &res) {
+    const bool force_refresh =
+        req.has_param("refresh") && (req.get_param_value("refresh") == "1" || req.get_param_value("refresh") == "true");
 
-    const std::string markets_path = "/coins/markets?vs_currency=" + vs_currency +
-                                     "&order=market_cap_desc&sparkline=false&price_change_percentage=24h" +
-                                     "&per_page=" + per_page + "&page=" + page;
+    if (!force_refresh) {
+      auto snapshot = read_json_file(snapshot_path);
+      if (snapshot && is_valid_bootstrap_payload(*snapshot)) {
+        json stale_payload = *snapshot;
+        if (!stale_payload.contains("meta") || !stale_payload["meta"].is_object()) {
+          stale_payload["meta"] = json::object();
+        }
+        stale_payload["meta"]["source"] = "snapshot";
+        stale_payload["meta"]["served_at_epoch_ms"] = now_epoch_ms();
+        res.set_header("Cache-Control", "no-cache");
+        respond_json(res, stale_payload);
+        return;
+      }
+    }
 
-    auto global_future = std::async(std::launch::async, [&]() {
-      return fetch_json(api_cfg, "/global", api_key, 10, 60);
-    });
-    auto trending_future = std::async(std::launch::async, [&]() {
-      return fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
-    });
-    auto markets_future = std::async(std::launch::async, [&]() {
-      return fetch_json(api_cfg, markets_path, api_key, 10, 30);
-    });
-
-    auto global = global_future.get();
-    auto trending = trending_future.get();
-    auto markets = markets_future.get();
-
-    if (!global || !trending || !markets) {
-      respond_json(res, json{{"error", "Failed to fetch bootstrap market data"}}, 502);
+    auto live_payload = fetch_bootstrap_live(api_cfg, api_key);
+    if (live_payload) {
+      write_json_file(snapshot_path, *live_payload);
+      res.set_header("Cache-Control", "no-cache");
+      respond_json(res, *live_payload);
       return;
     }
 
-    res.set_header("Cache-Control", "public, max-age=15, stale-while-revalidate=30");
-    respond_json(res, json{{"global", *global}, {"trending", *trending}, {"markets", *markets}});
+    auto fallback = read_json_file(snapshot_path);
+    if (fallback && is_valid_bootstrap_payload(*fallback)) {
+      json fallback_payload = *fallback;
+      if (!fallback_payload.contains("meta") || !fallback_payload["meta"].is_object()) {
+        fallback_payload["meta"] = json::object();
+      }
+      fallback_payload["meta"]["source"] = "snapshot-fallback";
+      fallback_payload["meta"]["served_at_epoch_ms"] = now_epoch_ms();
+      fallback_payload["meta"]["warning"] = "live-refresh-failed";
+      res.set_header("Cache-Control", "no-cache");
+      respond_json(res, fallback_payload);
+      return;
+    }
+
+    respond_json(res, json{{"error", "Failed to fetch bootstrap market data"}}, 502);
   });
 
   server.Get("/api/trending", [&](const httplib::Request &, httplib::Response &res) {

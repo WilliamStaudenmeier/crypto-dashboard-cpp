@@ -2,16 +2,27 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
+#include <chrono>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+struct CacheEntry {
+  json payload;
+  std::chrono::steady_clock::time_point expires_at;
+};
+
+std::unordered_map<std::string, CacheEntry> g_api_cache;
+std::mutex g_api_cache_mutex;
 
 struct ApiConfig {
   std::string scheme;
@@ -45,7 +56,7 @@ ApiConfig parse_api_base_url(const std::string &url) {
 }
 
 std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, const std::string &api_key,
-                               int timeout_seconds = 10) {
+                               int timeout_seconds = 10, int cache_ttl_seconds = 0) {
   const std::string base = cfg.scheme + "://" + cfg.host;
   httplib::Client client(base);
 
@@ -70,13 +81,29 @@ std::optional<json> fetch_json(const ApiConfig &cfg, const std::string &path, co
     full_path += "x_cg_demo_api_key=" + api_key;
   }
 
+  if (cache_ttl_seconds > 0) {
+    std::lock_guard<std::mutex> lock(g_api_cache_mutex);
+    auto it = g_api_cache.find(full_path);
+    if (it != g_api_cache.end() && std::chrono::steady_clock::now() < it->second.expires_at) {
+      return it->second.payload;
+    }
+  }
+
   auto response = client.Get(full_path.c_str(), headers);
   if (!response || response->status != 200) {
     return std::nullopt;
   }
 
   try {
-    return json::parse(response->body);
+    auto parsed = json::parse(response->body);
+    if (cache_ttl_seconds > 0) {
+      std::lock_guard<std::mutex> lock(g_api_cache_mutex);
+      g_api_cache[full_path] = CacheEntry{
+          parsed,
+          std::chrono::steady_clock::now() + std::chrono::seconds(cache_ttl_seconds),
+      };
+    }
+    return parsed;
   } catch (...) {
     return std::nullopt;
   }
@@ -144,7 +171,7 @@ int main(int argc, char **argv) {
   });
 
   server.Get("/api/global", [&](const httplib::Request &, httplib::Response &res) {
-    auto data = fetch_json(api_cfg, "/global", api_key);
+    auto data = fetch_json(api_cfg, "/global", api_key, 10, 60);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch global market data"}}, 502);
       return;
@@ -153,7 +180,7 @@ int main(int argc, char **argv) {
   });
 
   server.Get("/api/trending", [&](const httplib::Request &, httplib::Response &res) {
-    auto data = fetch_json(api_cfg, "/search/trending", api_key);
+    auto data = fetch_json(api_cfg, "/search/trending", api_key, 10, 60);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch trending data"}}, 502);
       return;
@@ -170,7 +197,7 @@ int main(int argc, char **argv) {
                              "&order=market_cap_desc&sparkline=false&price_change_percentage=24h" +
                              "&per_page=" + per_page + "&page=" + page;
 
-    auto data = fetch_json(api_cfg, path, api_key);
+    auto data = fetch_json(api_cfg, path, api_key, 10, 30);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch market list"}}, 502);
       return;
@@ -191,7 +218,7 @@ int main(int argc, char **argv) {
     const std::string path = "/coins/" + coin_id + "/market_chart?vs_currency=" + vs_currency +
                              "&days=" + days + "&interval=daily";
 
-    auto data = fetch_json(api_cfg, path, api_key);
+    auto data = fetch_json(api_cfg, path, api_key, 10, 300);
     if (!data) {
       respond_json(res, json{{"error", "Failed to fetch market history"}}, 502);
       return;

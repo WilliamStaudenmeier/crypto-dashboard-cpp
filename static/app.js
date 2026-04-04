@@ -125,6 +125,37 @@ function buildSparkline(prices) {
   `;
 }
 
+function renderLineChartsFromHistoryMap(coins, historyMap) {
+  const host = document.getElementById("line-charts");
+  host.innerHTML = "";
+
+  coins.forEach((coin) => {
+    const prices = (historyMap?.[coin.id] || []).map((entry) => entry[1]);
+    const card = document.createElement("article");
+    card.className = "chart-card";
+
+    if (!prices.length) {
+      card.innerHTML = `
+        <h3 class="chart-title">${coin.name}</h3>
+        <p class="chart-meta">No data available.</p>
+      `;
+      host.appendChild(card);
+      return;
+    }
+
+    const delta = prices[prices.length - 1] - prices[0];
+    const deltaPct = prices[0] ? (delta / prices[0]) * 100 : 0;
+    const deltaClass = delta >= 0 ? "change-up" : "change-down";
+
+    card.innerHTML = `
+      <h3 class="chart-title">${coin.name}</h3>
+      ${buildSparkline(prices)}
+      <p class="chart-meta ${deltaClass}">${formatPercent(deltaPct)} over 1Y</p>
+    `;
+    host.appendChild(card);
+  });
+}
+
 async function renderLineCharts(coins, days) {
   const host = document.getElementById("line-charts");
   host.innerHTML = "<p class=\"chart-meta\">Loading chart history...</p>";
@@ -188,8 +219,13 @@ async function bootstrap() {
 
     topFiveCoins = (bootstrapData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
     if (!document.body.classList.contains("sidebar-collapsed")) {
-      await renderLineCharts(topFiveCoins, HISTORY_DAYS);
-      chartsLoaded = true;
+      if (bootstrapData?.history && Object.keys(bootstrapData.history).length) {
+        renderLineChartsFromHistoryMap(topFiveCoins, bootstrapData.history);
+        chartsLoaded = true;
+      } else {
+        await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+        chartsLoaded = true;
+      }
     }
 
     // Refresh right after initial render and replace stale data with live data.
@@ -202,7 +238,11 @@ async function bootstrap() {
 
         topFiveCoins = (refreshedData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
         if (chartsLoaded && !document.body.classList.contains("sidebar-collapsed")) {
-          await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+          if (refreshedData?.history && Object.keys(refreshedData.history).length) {
+            renderLineChartsFromHistoryMap(topFiveCoins, refreshedData.history);
+          } else {
+            await renderLineCharts(topFiveCoins, HISTORY_DAYS);
+          }
         }
       } catch (error) {
         console.error(error);

@@ -1,0 +1,68 @@
+name: Refresh Snapshot
+
+on:
+  schedule:
+    - cron: "15 12 * * *" # Daily at 12:15 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch latest market snapshot
+        run: |
+          set -euo pipefail
+
+          global=$(curl -sS 'https://api.coingecko.com/api/v3/global')
+          trending=$(curl -sS 'https://api.coingecko.com/api/v3/search/trending')
+          markets=$(curl -sS 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&sparkline=false&price_change_percentage=24h&per_page=20&page=1')
+
+          top_ids=$(echo "$markets" | jq -r '.[0:5] | .[].id')
+          history='{}'
+
+          for id in $top_ids; do
+            prices=$(curl -sS "https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=365&interval=daily" | jq '.prices')
+            history=$(echo "$history" | jq --arg id "$id" --argjson prices "$prices" '. + {($id): $prices}')
+          done
+
+          updated_ms=$(date +%s000)
+
+          jq -n \
+            --argjson global "$global" \
+            --argjson trending "$trending" \
+            --argjson markets "$markets" \
+            --argjson history "$history" \
+            --arg updated "$updated_ms" \
+            '{
+              global: $global,
+              trending: $trending,
+              markets: $markets,
+              history: $history,
+              meta: {
+                source: "snapshot",
+                updated_at_epoch_ms: ($updated | tonumber)
+              }
+            }' > db.json
+
+          cp db.json static/db.json
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet db.json static/db.json; then
+            echo "No snapshot changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add db.json static/db.json
+          git commit -m "chore: daily snapshot refresh"
+          git push

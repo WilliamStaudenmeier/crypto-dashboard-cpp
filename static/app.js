@@ -11,6 +11,8 @@ const DEFAULT_RENDER_API_BASE = "https://crypto-dashboard-cpp.onrender.com";
 const API_BASE_URL =
   EXPLICIT_API_BASE ||
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : DEFAULT_RENDER_API_BASE);
+let currentMarkets = [];
+let marketAnimationInterval = null;
 
 function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
@@ -73,6 +75,34 @@ function renderMarkets(markets) {
   });
 }
 
+function randint(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function animateMarketPrices() {
+  if (!currentMarkets.length) {
+    return;
+  }
+
+  currentMarkets = currentMarkets.map((coin) => {
+    const step = randint(0, 1) * randint(-1, 1);
+    const nextPrice = Math.max(0, (coin.current_price || 0) + step);
+    return { ...coin, current_price: nextPrice };
+  });
+
+  renderMarkets(currentMarkets);
+}
+
+function startMarketAnimation() {
+  if (marketAnimationInterval) {
+    clearInterval(marketAnimationInterval);
+  }
+
+  marketAnimationInterval = setInterval(() => {
+    animateMarketPrices();
+  }, 10000);
+}
+
 
 async function bootstrap() {
   try {
@@ -87,7 +117,9 @@ async function bootstrap() {
 
     renderGlobal(bootstrapData?.global);
     renderTrending(bootstrapData?.trending);
-    renderMarkets(bootstrapData?.markets || []);
+    currentMarkets = (bootstrapData?.markets || []).map((coin) => ({ ...coin }));
+    renderMarkets(currentMarkets);
+    startMarketAnimation();
 
     // Refresh right after initial render and replace stale data with live data.
     setTimeout(async () => {
@@ -95,7 +127,8 @@ async function bootstrap() {
         const refreshedData = await fetchJson(refreshUrl());
         renderGlobal(refreshedData?.global);
         renderTrending(refreshedData?.trending);
-        renderMarkets(refreshedData?.markets || []);
+        currentMarkets = (refreshedData?.markets || []).map((coin) => ({ ...coin }));
+        renderMarkets(currentMarkets);
       } catch (error) {
         console.error(error);
       }

@@ -19,6 +19,11 @@ function apiUrl(path) {
   return `${API_BASE_URL}${path}`;
 }
 
+function refreshUrl() {
+  const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  return isLocal ? apiUrl("/api/bootstrap?refresh=1") : "/api/bootstrap-refresh";
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -231,7 +236,7 @@ async function bootstrap() {
     // Refresh right after initial render and replace stale data with live data.
     setTimeout(async () => {
       try {
-        const refreshedData = await fetchJson(apiUrl("/api/bootstrap?refresh=1"));
+        const refreshedData = await fetchJson(refreshUrl());
         renderGlobal(refreshedData?.global);
         renderTrending(refreshedData?.trending);
         renderMarkets(refreshedData?.markets || []);

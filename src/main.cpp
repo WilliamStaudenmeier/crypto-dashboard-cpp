@@ -222,35 +222,9 @@ std::optional<json> fetch_bootstrap_live(const ApiConfig &api_cfg) {
     return std::nullopt;
   }
 
-  json history = json::object();
-  std::vector<std::future<std::optional<json>>> history_futures;
-  std::vector<std::string> history_coin_ids;
-
-  const std::size_t top_count = std::min<std::size_t>(5, markets->is_array() ? markets->size() : 0);
-  for (std::size_t i = 0; i < top_count; ++i) {
-    const auto &coin = (*markets)[i];
-    if (!coin.is_object() || !coin.contains("id") || !coin["id"].is_string()) {
-      continue;
-    }
-    const std::string coin_id = coin["id"].get<std::string>();
-    const std::string path = "/coins/" + coin_id + "/market_chart?vs_currency=usd&days=365&interval=daily";
-    history_coin_ids.push_back(coin_id);
-    history_futures.push_back(std::async(std::launch::async, [api_cfg, path]() {
-      return fetch_json(api_cfg, path, 10, 300);
-    }));
-  }
-
-  for (std::size_t i = 0; i < history_futures.size(); ++i) {
-    auto history_payload = history_futures[i].get();
-    if (history_payload && history_payload->contains("prices")) {
-      history[history_coin_ids[i]] = (*history_payload)["prices"];
-    }
-  }
-
   return json{{"global", *global},
               {"trending", *trending},
               {"markets", *markets},
-              {"history", history},
               {"meta", {{"source", "live"}, {"updated_at_epoch_ms", now_epoch_ms()}}}};
 }
 

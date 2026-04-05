@@ -6,9 +6,6 @@ const formatMoney = (value) =>
   }).format(value || 0);
 
 const formatPercent = (value) => `${(value || 0).toFixed(2)}%`;
-let topFiveCoins = [];
-const HISTORY_DAYS = 365;
-let chartsLoaded = false;
 const EXPLICIT_API_BASE = (window.__API_BASE_URL__ || "").replace(/\/$/, "");
 const DEFAULT_RENDER_API_BASE = "https://crypto-dashboard-cpp.onrender.com";
 const API_BASE_URL =
@@ -30,29 +27,6 @@ async function fetchJson(url) {
     throw new Error(`Request failed: ${url}`);
   }
   return response.json();
-}
-
-function setupSidebarToggle() {
-  const button = document.getElementById("sidebar-toggle");
-  if (!button) {
-    return;
-  }
-
-  button.addEventListener("click", () => {
-    const collapsed = document.body.classList.toggle("sidebar-collapsed");
-    button.textContent = collapsed ? "Show Charts" : "Hide Charts";
-    button.setAttribute("aria-expanded", String(!collapsed));
-
-    if (!collapsed && !chartsLoaded && topFiveCoins.length) {
-      renderLineCharts(topFiveCoins, HISTORY_DAYS)
-        .then(() => {
-          chartsLoaded = true;
-        })
-        .catch((error) => {
-          console.error(error);
-        });
-    }
-  });
 }
 
 function renderGlobal(globalData) {
@@ -99,116 +73,9 @@ function renderMarkets(markets) {
   });
 }
 
-function buildSparkline(prices) {
-  if (!prices.length) {
-    return "";
-  }
-
-  const width = 375;
-  const height = 100;
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  const span = Math.max(max - min, 0.0001);
-
-  const points = prices
-    .map((price, index) => {
-      const x = (index / (prices.length - 1 || 1)) * width;
-      const y = height - ((price - min) / span) * height;
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
-
-  const end = prices[prices.length - 1] || 0;
-  const start = prices[0] || 0;
-  const up = end >= start;
-  const stroke = up ? "#50f0a4" : "#ff6b6b";
-
-  return `
-    <svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
-      <polyline fill="none" stroke="${stroke}" stroke-width="2.2" points="${points}" />
-    </svg>
-  `;
-}
-
-function renderLineChartsFromHistoryMap(coins, historyMap) {
-  const host = document.getElementById("line-charts");
-  host.innerHTML = "";
-
-  coins.forEach((coin) => {
-    const prices = (historyMap?.[coin.id] || []).map((entry) => entry[1]);
-    const card = document.createElement("article");
-    card.className = "chart-card";
-
-    if (!prices.length) {
-      card.innerHTML = `
-        <h3 class="chart-title">${coin.name}</h3>
-        <p class="chart-meta">No data available.</p>
-      `;
-      host.appendChild(card);
-      return;
-    }
-
-    const delta = prices[prices.length - 1] - prices[0];
-    const deltaPct = prices[0] ? (delta / prices[0]) * 100 : 0;
-    const deltaClass = delta >= 0 ? "change-up" : "change-down";
-
-    card.innerHTML = `
-      <h3 class="chart-title">${coin.name}</h3>
-      ${buildSparkline(prices)}
-      <p class="chart-meta ${deltaClass}">${formatPercent(deltaPct)} over 1Y</p>
-    `;
-    host.appendChild(card);
-  });
-}
-
-async function renderLineCharts(coins, days) {
-  const host = document.getElementById("line-charts");
-  host.innerHTML = "<p class=\"chart-meta\">Loading chart history...</p>";
-
-  const results = await Promise.all(
-    coins.map(async (coin) => {
-      try {
-        const data = await fetchJson(apiUrl(`/api/history?coin_id=${encodeURIComponent(coin.id)}&days=${days}&vs_currency=usd`));
-        const prices = (data?.prices || []).map((entry) => entry[1]);
-        return { coin, prices };
-      } catch {
-        return { coin, prices: [] };
-      }
-    }),
-  );
-
-  host.innerHTML = "";
-
-  results.forEach(({ coin, prices }) => {
-    const card = document.createElement("article");
-    card.className = "chart-card";
-
-    if (!prices.length) {
-      card.innerHTML = `
-        <h3 class="chart-title">${coin.name}</h3>
-        <p class="chart-meta">No data available.</p>
-      `;
-      host.appendChild(card);
-      return;
-    }
-
-    const delta = prices[prices.length - 1] - prices[0];
-    const deltaPct = prices[0] ? (delta / prices[0]) * 100 : 0;
-    const deltaClass = delta >= 0 ? "change-up" : "change-down";
-
-    card.innerHTML = `
-      <h3 class="chart-title">${coin.name}</h3>
-      ${buildSparkline(prices)}
-      <p class="chart-meta ${deltaClass}">${formatPercent(deltaPct)} over 1Y</p>
-    `;
-    host.appendChild(card);
-  });
-}
 
 async function bootstrap() {
   try {
-    setupSidebarToggle();
-
     let bootstrapData;
     try {
       // Stale-first: render snapshot instantly.
@@ -222,17 +89,6 @@ async function bootstrap() {
     renderTrending(bootstrapData?.trending);
     renderMarkets(bootstrapData?.markets || []);
 
-    topFiveCoins = (bootstrapData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
-    if (!document.body.classList.contains("sidebar-collapsed")) {
-      if (bootstrapData?.history && Object.keys(bootstrapData.history).length) {
-        renderLineChartsFromHistoryMap(topFiveCoins, bootstrapData.history);
-        chartsLoaded = true;
-      } else {
-        await renderLineCharts(topFiveCoins, HISTORY_DAYS);
-        chartsLoaded = true;
-      }
-    }
-
     // Refresh right after initial render and replace stale data with live data.
     setTimeout(async () => {
       try {
@@ -240,15 +96,6 @@ async function bootstrap() {
         renderGlobal(refreshedData?.global);
         renderTrending(refreshedData?.trending);
         renderMarkets(refreshedData?.markets || []);
-
-        topFiveCoins = (refreshedData?.markets || []).slice(0, 5).map((coin) => ({ id: coin.id, name: coin.name }));
-        if (chartsLoaded && !document.body.classList.contains("sidebar-collapsed")) {
-          if (refreshedData?.history && Object.keys(refreshedData.history).length) {
-            renderLineChartsFromHistoryMap(topFiveCoins, refreshedData.history);
-          } else {
-            await renderLineCharts(topFiveCoins, HISTORY_DAYS);
-          }
-        }
       } catch (error) {
         console.error(error);
       }

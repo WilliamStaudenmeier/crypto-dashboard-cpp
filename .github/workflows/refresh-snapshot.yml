@@ -23,27 +23,17 @@ jobs:
           trending=$(curl -sS 'https://api.coingecko.com/api/v3/search/trending')
           markets=$(curl -sS 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&sparkline=false&price_change_percentage=24h&per_page=20&page=1')
 
-          top_ids=$(echo "$markets" | jq -r '.[0:5] | .[].id')
-          history='{}'
-
-          for id in $top_ids; do
-            prices=$(curl -sS "https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=365&interval=daily" | jq '.prices')
-            history=$(echo "$history" | jq --arg id "$id" --argjson prices "$prices" '. + {($id): $prices}')
-          done
-
           updated_ms=$(date +%s000)
 
           jq -n \
             --argjson global "$global" \
             --argjson trending "$trending" \
             --argjson markets "$markets" \
-            --argjson history "$history" \
             --arg updated "$updated_ms" \
             '{
               global: $global,
               trending: $trending,
               markets: $markets,
-              history: $history,
               meta: {
                 source: "snapshot",
                 updated_at_epoch_ms: ($updated | tonumber)
